@@ -1,6 +1,6 @@
 import { Base64 } from "https://deno.land/x/bb64@1.1.0/mod.ts";
 
-export async function getkeywords(image: string): Promise<string[]> {
+async function getKeywords(image: string): Promise<string[]> {
   const body = {
     "model": "llava:13b",
     "format": "json",
@@ -9,48 +9,72 @@ export async function getkeywords(image: string): Promise<string[]> {
     "stream": false
   };
 
-  const response = await fetch("http://localhost:11434/api/generate", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(body),
-  });
+  try {
+    const response = await fetch("http://localhost:11434/api/generate", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
 
-  if (response.status !== 200) {
-    console.log(`Error: ${response.status}: ${response.statusText}`);
-    return [];
-  } else {
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+
     const json = await response.json();
     const keywords = JSON.parse(json.response);
     return keywords?.keywords || [];
+  } catch (error) {
+    console.error("Error occurred while fetching keywords:", error);
+    return [];
   }
-
 }
 
-function createFileName(keywords: string[], fileext: string): string {
-  let newfilename = "";
-  if (keywords.length > 0) {
-    const fileparts = keywords.map(k => k.replace(/ /g, "_"));
-    const filteredWords = fileparts.filter(w => {
-      const cl = newfilename.length + w.length;
-      return cl <= 230
-    })
-    newfilename = filteredWords.join("-") + "." + fileext;
+function truncateFileName(fileName: string): string {
+  const maxLength = 254;
+  if (fileName.length <= maxLength) {
+    return fileName;
   }
-  return newfilename;
+  const extension = fileName.substring(fileName.lastIndexOf('.'));
+  const truncatedName = fileName.substring(0, maxLength - extension.length);
+  return truncatedName + extension;
+}
+
+function createFileName(keywords: string[], originalFileName: string): string {
+  let newFileName = "";
+  if (keywords.length > 0) {
+    const fileParts = keywords.map(k => k.replace(/ /g, "_"));
+    const fileNameWithoutExtension = originalFileName.split(".").slice(0, -1).join(".");
+    const truncatedFileName = truncateFileName(fileNameWithoutExtension);
+    newFileName = fileParts.join("-") + "-" + truncatedFileName;
+  }
+  return newFileName;
+}
+
+async function main() {
+  const currentPath = Deno.cwd();
+  for await (const file of Deno.readDirSync(".")) {
+    if (file.isFile && (file.name.endsWith(".jpg") || file.name.endsWith(".png"))) {
+      try {
+        const b64 = await Base64.fromFile(`${currentPath}/${file.name}`);
+        const keywords = await getKeywords(b64.toString());
+        const newFileName = createFileName(keywords, file.name);
+        if (newFileName) {
+          const extension = file.name.split(".").pop()!;
+          const copiedFileName = `${newFileName}.${extension}`;
+          Deno.copyFileSync(`${currentPath}/${file.name}`, `${currentPath}/${copiedFileName}`);
+          console.log(`Copied ${file.name} to ${copiedFileName}`);
+        } else {
+          console.log(`Unable to generate new filename for ${file.name}`);
+        }
+      } catch (error) {
+        console.error(`Error occurred while processing ${file.name}:`, error);
+      }
+    }
+  }
 }
 
 if (import.meta.main) {
-  const currentpath = Deno.cwd();
-  for (const file of Deno.readDirSync(".")) {
-    if (file.name.endsWith(".jpg") || file.name.endsWith(".png")) {
-      const b64 = Base64.fromFile(`${currentpath}/${file.name}`).toString();
-      const keywords = await getkeywords(b64);
-      const newfilename = createFileName(keywords, file.name.split(".").pop()!);
-      Deno.copyFileSync(`${currentpath}/${file.name}`, `${currentpath}/${newfilename}`);
-
-      console.log(`Copied ${file.name} to ${newfilename}`);
-    }
-  }
+  main().catch(error => console.error("An error occurred in the main function:", error));
 }
