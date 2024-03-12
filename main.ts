@@ -1,4 +1,44 @@
 import { Base64 } from "https://deno.land/x/bb64@1.1.0/mod.ts";
+import { encode, decode } from "https://deno.land/std@0.179.0/encoding/base64.ts";
+import http from 'node:http';
+
+function executeScript(): void {
+  const data = JSON.stringify({ model: 'llava:13b' });
+
+  const options = {
+    hostname: 'localhost',
+    port: 11434,
+    path: '/api/generate',
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Content-Length': data.length
+    }
+  };
+
+  const req = http.request(options, (res) => {
+    console.log(`Status Code: ${res.statusCode}`);
+
+    res.on('data', (chunk) => {
+      console.log(`Response: ${chunk}`);
+    });
+
+    res.on('end', () => {
+      console.log('Script executed successfully');
+    });
+  });
+
+  req.on('error', (error) => {
+    console.error('Error executing script:', error);
+  });
+
+  req.write(data);
+  req.end();
+}
+
+function scheduleScriptExecution(): void {
+  setInterval(executeScript, 60000); // Execute every 60 seconds (1 minute)
+}
 
 async function getKeywords(image: string): Promise<string[]> {
   const body = {
@@ -55,35 +95,52 @@ function createFileName(keywords: string[], originalFileName: string): string {
     const maxKeywordsLength = 250 - truncatedFileName.length - 1; // Account for the dash between keywords and filename
     const truncatedKeywords = keywordsString.length > maxKeywordsLength ? keywordsString.substring(0, maxKeywordsLength) : keywordsString;
 
-    newFileName = truncateFileName(truncatedKeywords + "-" + truncatedFileName);
-    newFileName = newFileName.replace(/[<>:"/\\|?*\x00-\x1F]/g, "_"); // Replace invalid characters with an underscore
+    newFileName = truncateFileName(truncatedFileName + "-" + truncatedKeywords);
+    newFileName = newFileName.replace(/[\[<>:"/\\|?*\x00-\x1F]/g, "_"); // Replace invalid characters with an underscore
   }
+
   return newFileName;
 }
+
+let isProcessingComplete = false;
 
 async function processDirectory(dir: string) {
   for await (const entry of Deno.readDir(dir)) {
     const fullPath = `${dir}/${entry.name}`;
     if (entry.isDirectory) {
-      await processDirectory(fullPath); // Ricorsivamente processa le sottodirectory
-    } else if (entry.isFile && (entry.name.endsWith(".jpg") || entry.name.endsWith(".png"))) {
-      await processImage(fullPath); // Processa l'immagine
+      await processDirectory(fullPath); // Recursively process subdirectories
+    } else if (entry.isFile && (entry.name.toLowerCase().endsWith(".jpg") || entry.name.toLowerCase().endsWith(".png") || entry.name.toLowerCase().endsWith(".jpeg"))) {
+      await processImage(fullPath); // Process the image
     }
+  }
+
+  // Check if this is the root directory
+  if (dir === Deno.cwd()) {
+    isProcessingComplete = true;
+    console.log("All images have been processed.");
   }
 }
 
 async function processImage(filePath: string) {
   try {
-    const b64 = await Base64.fromFile(filePath);
-    const keywords = await getKeywords(b64.toString());
-    const newFileName = createFileName(keywords, filePath.split("/").pop()!);
-    if (newFileName) {
-      const extension = filePath.split(".").pop()!;
-      const copiedFileName = `${newFileName}.${extension}`;
-      Deno.copyFileSync(filePath, `${filePath.slice(0, filePath.lastIndexOf("/"))}/${copiedFileName}`);
-      console.log(`Copied ${filePath} to ${copiedFileName}`);
+    const extension = filePath.split(".").pop()!.toLowerCase();
+    const allowedExtensions = ["jpg", "png", "jpeg"];
+
+    if (allowedExtensions.includes(extension)) {
+      const data = await Deno.readFile(filePath);
+      const b64 = encode(data);
+      const keywords = await getKeywords(b64);
+      const newFileName = createFileName(keywords, filePath.split("/").pop()!);
+
+      if (newFileName) {
+        const copiedFileName = `${newFileName}.${extension}`;
+        Deno.copyFileSync(filePath, `${filePath.slice(0, filePath.lastIndexOf("/"))}/${copiedFileName}`);
+        console.log(`Copied ${filePath} to ${copiedFileName}`);
+      } else {
+        console.log(`Unable to generate new filename for ${filePath}`);
+      }
     } else {
-      console.log(`Unable to generate new filename for ${filePath}`);
+      console.log(`Skipping ${filePath} (unsupported file extension)`);
     }
   } catch (error) {
     console.error(`Error occurred while processing ${filePath}:`, error);
@@ -91,8 +148,19 @@ async function processImage(filePath: string) {
 }
 
 async function main() {
+  // Call the scheduling function when the script starts
+  scheduleScriptExecution();
   const currentPath = Deno.cwd();
   await processDirectory(currentPath);
+
+  // Check if all images have been processed every 5 seconds
+  const checkInterval = setInterval(() => {
+    if (isProcessingComplete) {
+      clearInterval(checkInterval);
+      console.log("Script terminated.");
+      Deno.exit(0);
+    }
+  }, 5000);
 }
 
 if (import.meta.main) {
