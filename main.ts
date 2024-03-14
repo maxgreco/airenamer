@@ -37,7 +37,7 @@ function executeScript(): void {
 }
 
 function scheduleScriptExecution(): void {
-  setInterval(executeScript, 60000); // Execute every 60 seconds (1 minute)
+  setInterval(executeScript, 270000); // Execute every 270 seconds (4 minutes and half)
 }
 
 async function getKeywords(image: string): Promise<string[]> {
@@ -46,7 +46,8 @@ async function getKeywords(image: string): Promise<string[]> {
     "format": "json",
     "prompt": `Describe the image as a collection of the most relevant keywords, max 10. Output in JSON format. Use the following schema: { filename: string, keywords: string[] }`,
     "images": [image],
-    "stream": false
+    "stream": false,
+    "keep_alive": -1
   };
 
   try {
