@@ -50,25 +50,45 @@ async function getKeywords(image: string): Promise<string[]> {
     "keep_alive": -1
   };
 
+  const timeout = 10000; // Timeout di 10 secondi
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => {
+    controller.abort();
+  }, timeout);
+
   try {
-    const response = await fetch("http://localhost:11434/api/generate", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(body),
+    // Verifica se il server è in ascolto
+    const testResponse = await fetch("http://localhost:11434", {
+      method: "GET",
+      signal: controller.signal, // Passa il segnale di annullamento
     });
 
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
-    }
+    if (testResponse.ok) {
+      const response = await fetch("http://localhost:11434/api/generate", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(body),
+        signal: controller.signal, // Passa il segnale di annullamento
+      });
 
-    const json = await response.json();
-    const keywords = JSON.parse(json.response);
-    return keywords?.keywords || [];
+      clearTimeout(timeoutId); // Cancella il timeout se la richiesta ha avuto successo
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const json = await response.json();
+      const keywords = JSON.parse(json.response);
+      return keywords?.keywords || [];
+    } else {
+      console.error("Server not available. Skipping image processing.");
+      return [];
+    }
   } catch (error) {
     console.error("Error occurred while fetching keywords:", error);
-    throw error;
+    return []; // Restituisci un array vuoto per continuare l'elaborazione
   }
 }
 
