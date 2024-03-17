@@ -44,13 +44,13 @@ async function getKeywords(image: string): Promise<string[]> {
   const body = {
     "model": "llava:13b",
     "format": "json",
-    "prompt": `Describe the image as a collection of the most relevant keywords, max 10. Output in JSON format. Use the following schema: { filename: string, keywords: string[] }`,
+    "prompt": `Describe the image as a collection of the most relevant keywords, output in JSON format. Use the following schema: { filename: string, keywords: string[] }`,
     "images": [image],
     "stream": false,
     "keep_alive": -1
   };
 
-  const timeout = 10000; // Timeout di 10 secondi
+  const timeout = 20000; // Timeout di 20 secondi
   const controller = new AbortController();
   const timeoutId = setTimeout(() => {
     controller.abort();
@@ -92,31 +92,22 @@ async function getKeywords(image: string): Promise<string[]> {
   }
 }
 
-function truncateFileName(fileName: string): string {
-  const maxLength = 250;
-  if (fileName.length <= maxLength) {
-    return fileName;
-  }
-
-  const extensionIndex = fileName.lastIndexOf('.');
-  const extension = fileName.substring(extensionIndex);
-  const truncatedName = fileName.substring(0, maxLength - extension.length);
-  return truncatedName + extension;
-}
-
 function createFileName(keywords: string[], originalFileName: string): string {
-  let newFileName = "";
+  let newFileName = originalFileName;
   if (keywords.length > 0) {
     const fileParts = keywords.map(k => k.replace(/ /g, "_"));
-    const fileNameWithoutExtension = originalFileName.split(".").slice(0, -1).join(".");
-    const truncatedFileName = truncateFileName(fileNameWithoutExtension);
     const keywordsString = fileParts.join("-");
 
-    // Truncate keywords if necessary
-    const maxKeywordsLength = 250 - truncatedFileName.length - 1; // Account for the dash between keywords and filename
+    const fileNameWithoutExtension = originalFileName.split(".").slice(0, -1).join(".");
+    const extension = originalFileName.split(".").pop()!.toLowerCase();
+
+    // Calcola la lunghezza massima delle parole chiave
+    const maxKeywordsLength = 240 - fileNameWithoutExtension.length - 1; // Accounting for the dash between keywords and filename
+
+    // Trunca le parole chiave se necessario
     const truncatedKeywords = keywordsString.length > maxKeywordsLength ? keywordsString.substring(0, maxKeywordsLength) : keywordsString;
 
-    newFileName = truncateFileName(truncatedFileName + "-" + truncatedKeywords);
+    newFileName = `${fileNameWithoutExtension}-${truncatedKeywords}.${extension}`;
     newFileName = newFileName.replace(/[\[<>:"/\\|?*\x00-\x1F]/g, "_"); // Replace invalid characters with an underscore
   }
 
@@ -154,9 +145,30 @@ async function processImage(filePath: string) {
       const newFileName = createFileName(keywords, filePath.split("/").pop()!);
 
       if (newFileName) {
-        const copiedFileName = `${newFileName}.${extension}`;
-        Deno.copyFileSync(filePath, `${filePath.slice(0, filePath.lastIndexOf("/"))}/${copiedFileName}`);
-        console.log(`Copied ${filePath} to ${copiedFileName}`);
+        const copiedFileName = `${newFileName}`;
+        const maxAttempts = 5; // Numero massimo di tentativi
+        let attempts = 0;
+
+        while (attempts < maxAttempts) {
+          try {
+            Deno.copyFileSync(filePath, `${filePath.slice(0, filePath.lastIndexOf("/"))}/${copiedFileName}`);
+            console.log(`Copied ${filePath} to ${copiedFileName}`);
+            break;
+          } catch (error) {
+            if (error.code === "EBUSY") {
+              attempts++;
+              console.log(`File ${filePath} is in use, retrying in 2 seconds (attempt ${attempts}/${maxAttempts})...`);
+              await new Promise(resolve => setTimeout(resolve, 2000)); // Aspetta 2 secondi prima di riprovare
+            } else {
+              console.error(`Error occurred while processing ${filePath}:`, error);
+              break;
+            }
+          }
+        }
+
+        if (attempts === maxAttempts) {
+          console.error(`Failed to copy ${filePath} after ${maxAttempts} attempts.`);
+        }
       } else {
         console.log(`Unable to generate new filename for ${filePath}`);
       }
